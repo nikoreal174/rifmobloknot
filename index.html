@@ -477,5 +477,450 @@ async function enableOffline() {
 }
 enableOffline();
 </script>
+      <script>
+/* Рифмоблокнот 0.2: импорт словаря OpenRussian.
+   Данные: CC BY-SA 4.0.
+   Изменения данных: извлечение словоформ, преобразование
+   ударений, удаление повторов и неподходящих записей.
+*/
+(() => {
+  "use strict";
+
+  const el = id => document.getElementById(id);
+  const pause = () => new Promise(resolve => setTimeout(resolve, 0));
+  const BASE =
+    "https://raw.githubusercontent.com/Badestrand/russian-dictionary/master/";
+
+  const SOURCES = [
+    ["nouns.csv", "noun", 9, "существительные"],
+    ["verbs.csv", "verb", 5, "глаголы"],
+    ["adjectives.csv", "adjective", 4, "прилагательные"],
+    ["others.csv", "other", Infinity, "остальные слова"]
+  ];
+
+  posNames.adjective = "прилагательное";
+
+  let largeReady = false;
+  let buckets = new Map();
+  let searchVersion = 0;
+
+  // Панель загрузки
+  const panel = document.createElement("section");
+  panel.className = "card";
+  panel.innerHTML = `
+    <h2>Большой словарь · версия 0.2</h2>
+    <p class="muted">
+      Первая загрузка требует интернета.
+      После сохранения словарь доступен без сети.
+    </p>
+    <button id="loadDictionary" class="primary" disabled>
+      Загрузить большой словарь
+    </button>
+    <p id="dictionaryStatus" role="status" class="muted">
+      Проверяю сохранённый словарь…
+    </p>
+    <small>
+      Источник:
+      <a href="https://github.com/Badestrand/russian-dictionary"
+         target="_blank" rel="noopener noreferrer">OpenRussian</a>.
+      Данные и их преобразованная версия:
+      <a href="https://creativecommons.org/licenses/by-sa/4.0/"
+         target="_blank" rel="noopener noreferrer">CC BY-SA 4.0</a>.
+      Для приложения отобраны словоформы с определимым ударением.
+    </small>
+  `;
+
+  document.querySelector("main").append(panel);
+  const loadButton = el("loadDictionary");
+  const status = el("dictionaryStatus");
+
+  // Отдельная база: записи блокнота не меняем.
+  let databasePromise;
+
+  function database() {
+    if (!databasePromise) {
+      databasePromise = new Promise((resolve, reject) => {
+        const request = indexedDB.open(
+          "rifmobloknot-dictionary:" + location.pathname, 1
+        );
+        request.onupgradeneeded = () => {
+          request.result.createObjectStore("data");
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+        request.onblocked = () => {
+          status.textContent =
+            "Закрой другие вкладки приложения и обнови эту страницу.";
+        };
+      });
+    }
+    return databasePromise;
+  }
+
+  async function readDictionary() {
+    const db = await database();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("data", "readonly");
+      const request = tx.objectStore("data").get("openrussian-v1");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  async function saveDictionary(rows) {
+    const db = await database();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("data", "readwrite");
+      tx.objectStore("data").put(rows, "openrussian-v1");
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(
+        tx.error || new Error("Не удалось сохранить словарь")
+      );
+    });
+  }
+
+  // Эти файлы используют табуляцию между столбцами.
+  // Учитываем кавычки и переносы строк внутри полей.
+  function* tableRows(text) {
+    let row = [];
+    let field = "";
+    let quoted = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+
+      if (quoted) {
+        if (ch === '"') {
+          if (text[i + 1] === '"') {
+            field += '"';
+            i++;
+          } else {
+            quoted = false;
+          }
+        } else {
+          field += ch;
+        }
+      } else if (ch === '"' && field === "") {
+        quoted = true;
+      } else if (ch === "\t") {
+        row.push(field);
+        field = "";
+      } else if (ch === "\n" || ch === "\r") {
+        if (ch === "\r" && text[i + 1] === "\n") i++;
+        row.push(field);
+        if (row.some(Boolean)) yield row;
+        row = [];
+        field = "";
+      } else {
+        field += ch;
+      }
+    }
+
+    if (field || row.length) {
+      row.push(field);
+      yield row;
+    }
+  }
+
+  // В OpenRussian апостроф после гласной означает ударение.
+  function parseWord(raw) {
+    const text = raw.trim().toLowerCase().normalize("NFC");
+    let word = "";
+    const stresses = [];
+
+    for (const ch of text) {
+      if (ch === "'" || ch === "\u0301" || ch === "’") {
+        if (!word || !isVowel(word[word.length - 1])) return null;
+        stresses.push(word.length - 1);
+      } else if (/^[а-яё]$/.test(ch)) {
+        word += ch;
+      } else {
+        return null;
+      }
+    }
+
+    if (word.length < 2 || word.length > 40) return null;
+
+    const positions = [...word]
+      .map((ch, i) => isVowel(ch) ? i : -1)
+      .filter(i => i >= 0);
+
+    let stress = -1;
+    const unique = [...new Set(stresses)];
+
+    if (unique.length === 1) {
+      stress = unique[0];
+    } else if (unique.length > 1) {
+      return null;
+    } else if (word.includes("ё") &&
+               word.indexOf("ё") === word.lastIndexOf("ё")) {
+      stress = word.indexOf("ё");
+    } else if (positions.length === 1) {
+      stress = positions[0];
+    }
+
+    // Не угадываем ударение многосложного слова без пометки.
+    return stress >= 0 ? [word, stress] : null;
+  }
+
+  async function downloadDictionary() {
+    const entries = [];
+    const seen = new Set();
+
+    function addCell(cell, pos, lemma) {
+      for (const variant of (cell || "").split(/[,;/\n]+/)) {
+        const parsed = parseWord(variant);
+        if (!parsed) continue;
+
+        const [word, stress] = parsed;
+        const key = word + "|" + stress + "|" + pos;
+        if (seen.has(key)) continue;
+
+        seen.add(key);
+        entries.push([word, stress, pos, lemma]);
+      }
+    }
+
+    for (let fileIndex = 0; fileIndex < SOURCES.length; fileIndex++) {
+      const [file, pos, formsStart, title] = SOURCES[fileIndex];
+      status.textContent =
+        `Загружаю ${fileIndex + 1}/${SOURCES.length}: ${title}…`;
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 180000);
+      let text;
+
+      try {
+        const response = await fetch(BASE + file, {
+          signal: controller.signal
+        });
+        if (!response.ok) {
+          throw new Error(file + ": HTTP " + response.status);
+        }
+        text = await response.text();
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      const iterator = tableRows(text.replace(/^\uFEFF/, ""));
+      const header = iterator.next().value;
+
+      if (!header || header[0] !== "bare" ||
+          header[1] !== "accented") {
+        throw new Error("Неожиданный формат файла " + file);
+      }
+
+      let processed = 0;
+      for (const row of iterator) {
+        const lemma = (row[0] || "").toLowerCase();
+        addCell(row[1] || row[0], pos, lemma);
+
+        for (let i = formsStart; i < row.length; i++) {
+          addCell(row[i], pos, lemma);
+        }
+
+        if (++processed % 1200 === 0) {
+          status.textContent =
+            `Обрабатываю ${title}. Собрано вариантов: ` +
+            entries.length.toLocaleString("ru-RU");
+          await pause();
+        }
+      }
+    }
+
+    if (entries.length < 1000) {
+      throw new Error("Слишком мало данных: импорт остановлен");
+    }
+    return entries;
+  }
+
+  // Группируем по ударной гласной, чтобы не перебирать
+  // весь словарь при каждом поиске.
+  async function activateDictionary(rows) {
+    const next = [];
+    const nextBuckets = new Map();
+
+    for (let i = 0; i < rows.length; i++) {
+      const [word, stress, pos, lemma] = rows[i];
+      const item = {word, stress, pos, lemma};
+      next.push(item);
+
+      const vowel = signature(word, stress).v[0];
+      if (!nextBuckets.has(vowel)) nextBuckets.set(vowel, []);
+      nextBuckets.get(vowel).push(item);
+
+      if (i % 3000 === 0) await pause();
+    }
+
+    // Меняем рабочую базу только после подготовки новой.
+    dict.length = 0;
+    for (const item of next) dict.push(item);
+    buckets = nextBuckets;
+    largeReady = true;
+
+    const count = rows.length.toLocaleString("ru-RU");
+    el("dictSize").textContent =
+      "OpenRussian: " + count + " вариантов словоформ с ударениями.";
+
+    const oldWarning = el("dictSize").previousElementSibling;
+    if (oldWarning) {
+      oldWarning.textContent =
+        "Подключён большой словарь. Подбор пока приблизительный. " +
+        "Редкие слова и ошибки исходной базы возможны. " +
+        "Фразы и сленг пока не охвачены полноценно.";
+    }
+
+    document.querySelector("main > .muted").textContent =
+      "Прототип 0.2 · OpenRussian";
+
+    status.textContent =
+      "Словарь сохранён на устройстве: " + count +
+      " вариантов. Проверь поиск и запуск без интернета.";
+
+    loadButton.textContent = "Словарь установлен";
+    loadButton.disabled = true;
+
+    if (!el("sheet").hidden) prepareQuery();
+  }
+
+  // Поиск разбит на небольшие порции.
+  // Разные формы одного исходного слова не заполняют весь список.
+  const originalRender = renderResults;
+
+  renderResults = async function() {
+    const version = ++searchVersion;
+    if (!largeReady) {
+      originalRender();
+      return;
+    }
+
+    const word = getWord();
+    const stress = chosenStress;
+    el("results").replaceChildren();
+    el("message").textContent = "";
+
+    if (!/^[а-яё]+$/.test(word)) {
+      el("hint").textContent = "Введи одно русское слово.";
+      return;
+    }
+    if (stress < 0) {
+      el("hint").textContent = "Укажи ударение кнопкой выше.";
+      return;
+    }
+
+    el("hint").textContent = "Ищу созвучия…";
+
+    const mode = el("mode").value;
+    const limit = {tight: 0.30, free: 1.00, exp: 1.85}[mode];
+    const part = el("part").value;
+    const source = signature(word, stress);
+    const candidates = buckets.get(source.v[0]) || [];
+    const best = new Map();
+
+    for (let i = 0; i < candidates.length; i++) {
+      if (i % 600 === 0) {
+        await pause();
+        if (version !== searchVersion) return;
+      }
+
+      const item = candidates[i];
+      if (item.word === word) continue;
+      if (part === "noun" && item.pos !== "noun") continue;
+      if (part === "noverb" && item.pos === "verb") continue;
+
+      const cost = rhymeCost(
+        source, signature(item.word, item.stress)
+      );
+      if (cost > limit) continue;
+
+      const key = item.lemma + "|" + item.pos;
+      const previous = best.get(key);
+      if (!previous || cost < previous.cost) {
+        best.set(key, {item, cost});
+      }
+    }
+
+    if (version !== searchVersion) return;
+
+    const found = [...best.values()]
+      .sort((a, b) => a.cost - b.cost ||
+        a.item.word.length - b.item.word.length)
+      .slice(0, 60);
+
+    el("hint").textContent = found.length
+      ? "Проверь ударение. Показаны лучшие формы разных слов:"
+      : "Вариантов нет. Попробуй другой режим или ударение.";
+
+    for (const {item} of found) {
+      const button = document.createElement("button");
+      const title = document.createElement("span");
+      title.textContent =
+        item.word.slice(0, item.stress + 1) + "\u0301" +
+        item.word.slice(item.stress + 1);
+
+      const label = document.createElement("small");
+      label.textContent = posNames[item.pos] || "другая часть речи";
+      button.append(title, label);
+
+      button.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(item.word);
+          el("message").textContent = "Скопировано: " + item.word;
+        } catch {
+          el("message").textContent =
+            "Скопируй вручную: " + item.word;
+        }
+      };
+
+      el("results").append(button);
+    }
+  };
+
+  // Переподключаем переключатели к обновлённому поиску.
+  el("mode").onchange = renderResults;
+  el("part").onchange = renderResults;
+
+  loadButton.onclick = async () => {
+    loadButton.disabled = true;
+
+    try {
+      const rows = await downloadDictionary();
+      status.textContent = "Сохраняю словарь на телефоне…";
+      await saveDictionary(rows);
+      status.textContent = "Готовлю поиск…";
+      await activateDictionary(rows);
+    } catch (error) {
+      status.textContent =
+        "Не удалось установить словарь: " + error.message +
+        ". Тестовая база остаётся доступной. Можно повторить загрузку.";
+      loadButton.disabled = false;
+      loadButton.textContent = "Повторить загрузку";
+    }
+  };
+
+  // При запуске сначала читаем локальную копию — без сети.
+  (async () => {
+    try {
+      const rows = await readDictionary();
+      if (Array.isArray(rows) && rows.length > 1000) {
+        status.textContent = "Открываю словарь с телефона…";
+        await activateDictionary(rows);
+      } else {
+        status.textContent =
+          "Большой словарь ещё не установлен. " +
+          "Включи интернет и нажми кнопку загрузки.";
+        loadButton.disabled = false;
+      }
+    } catch (error) {
+      status.textContent =
+        "Не удалось открыть хранилище: " + error.message +
+        ". Не используй режим инкогнито.";
+      loadButton.disabled = false;
+    }
+  })();
+})();
+          </script>
+      
 </body>
 </html>
