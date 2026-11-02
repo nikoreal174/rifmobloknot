@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#141722">
+<title>Рифмоблокнот — прототип</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #10121a; color: #edf0fa;
+    font: 16px/1.5 system-ui, sans-serif;
+  }
+  main { max-width: 760px; margin: auto; padding: 18px 14px 80px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 18px; margin: 0; }
+  p { margin: 8px 0; }
+  .muted, small { color: #b3b9cd; }
+  .card {
+    background: #1b1f2d; border: 1px solid #30374c;
+    border-radius: 18px; padding: 15px; margin-top: 16px;
+  }
+  .row {
+    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  }
+  button, select, input[type="text"] {
+    font: inherit; color: inherit; background: #292f43;
+    border: 1px solid #414b68; border-radius: 11px; padding: 10px 12px;
+  }
+  button { cursor: pointer; }
+  button:focus-visible, textarea:focus-visible, input:focus-visible {
+    outline: 2px solid #bdadff;
+  }
+  .primary { background: #6953c7; border-color: #9179f1; }
+  input[type="file"] { max-width: 100%; margin: 10px 0; }
+  input[type="text"] { width: 100%; }
+  textarea {
+    width: 100%; min-height: 43vh; resize: vertical;
+    margin-top: 12px; padding: 14px;
+    color: #f0f2fa; background: #121520;
+    border: 1px solid #38415b; border-radius: 12px;
+    font: 18px/1.75 system-ui, sans-serif;
+  }
+  audio { display: block; width: 100%; margin: 10px 0; }
+  .sheet {
+    position: fixed; z-index: 10; bottom: 10px;
+    left: 10px; right: 10px; max-width: 730px;
+    margin: auto; max-height: 48dvh; overflow-y: auto;
+    padding: 16px; border-radius: 18px;
+    background: #202537; border: 1px solid #7764ba;
+    box-shadow: 0 0 40px #0009;
+  }
+  .sheet[hidden] { display: none; }
+  .between { justify-content: space-between; }
+  #results, #stress { margin-top: 10px; }
+  #results button { text-align: left; }
+  #results small { display: block; font-size: 11px; }
+  #message { min-height: 24px; }
+  .warning { color: #f4d591; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Рифмоблокнот</h1>
+  <div class="muted">Прототип 0.1 · тестовый словарь</div>
+  <p id="offline" class="muted" role="status">Подготовка офлайн-режима…</p>
+
+  <section class="card">
+    <h2>Бит</h2>
+    <p class="muted">Выбери аудио или видео. Картинка не показывается.</p>
+    <input id="mediaFile" type="file" accept="audio/*,video/*"
+           aria-label="Выбрать аудио или видео">
+    <audio id="player" controls preload="metadata"></audio>
+    <label><input id="loop" type="checkbox"> Повторять</label>
+    <p id="mediaInfo" class="muted" role="status">
+      После перезапуска файл нужно выбрать заново.
+    </p>
+  </section>
+
+  <section class="card">
+    <div class="row between">
+      <h2>Мой текст</h2>
+      <span id="saved" class="muted" role="status"></span>
+    </div>
+    <p class="muted">
+      Выдели одно слово — появится окно созвучий.
+      Или нажми «Найти рифмы».
+    </p>
+    <div class="row">
+      <button id="openRhymes" class="primary">Найти рифмы</button>
+      <button id="exportText">Скачать текст</button>
+    </div>
+    <textarea id="note" aria-label="Текст песни"
+      placeholder="Пиши здесь…"
+      spellcheck="true"></textarea>
+    <small>
+      Это одна запись. Делай резервные копии кнопкой «Скачать текст».
+    </small>
+  </section>
+
+  <section class="card">
+    <strong class="warning">Важно о поиске</strong>
+    <p class="muted">
+      Здесь маленькая проверочная база, не полноценный словарь.
+      Алгоритм приблизительно сравнивает ударный участок,
+      гласные и согласные. Это ещё не полноценная фонетическая модель.
+    </p>
+    <p id="dictSize" class="muted"></p>
+  </section>
+</main>
+
+<section id="sheet" class="sheet" aria-label="Подбор рифм" hidden>
+  <div class="row between">
+    <h2>Созвучия</h2>
+    <button id="closeSheet" aria-label="Закрыть окно">✕</button>
+  </div>
+
+  <p><input id="query" type="text" placeholder="Введи одно слово"
+            aria-label="Слово для поиска" autocomplete="off"></p>
+
+  <div class="row">
+    <select id="mode" aria-label="Степень близости">
+      <option value="tight">Плотно</option>
+      <option value="free" selected>Свободно</option>
+      <option value="exp">Эксперимент</option>
+    </select>
+
+    <select id="part" aria-label="Часть речи">
+      <option value="all">Все части речи</option>
+      <option value="noverb">Без глаголов</option>
+      <option value="noun">Существительные</option>
+    </select>
+  </div>
+
+  <div id="stress" class="row"></div>
+  <p id="hint" class="muted"></p>
+  <div id="results" class="row"></div>
+  <p id="message" class="muted" role="status"></p>
+  <small>Нажатие на вариант копирует слово, а не заменяет исходное.</small>
+</section>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const vowels = "аеёиоуыэюя";
+const isVowel = ch => vowels.includes(ch);
+const storageKey = "rifmobloknot:" + location.pathname + ":note";
+
+/*
+  ТЕСТОВАЯ БАЗА.
+  Заглавная гласная обозначает ударение.
+  Слова сравниваются алгоритмом, а не таблицей готовых пар.
+*/
+const groups = {
+  noun: `
+    снЫ дЫм мЫс сЫр мИр пИр тИр жИр
+    крЫша нИша тишинА веснА стенА волнА
+    плечА свечА мечА врачА лучА кирпичА
+    трАссу кАссу мАссу рАсу фрАзу
+    кАзус пАрус стАтус пАфос рАдиус
+    смЕх орЕх успЕх помЕха утЕха Эхо
+    приЕзд отъЕзд сосЕд билЕт секрЕт
+    прАйме крАй тАйна стАя мАйка
+    причАл вокзАл финАл метАлл
+    дорогА тревОга подмОга порОг
+    рИтм бИт свЕт слЕд отвЕт
+  `,
+  verb: `
+    заЕхал приЕхал уЕхал поЕхал
+    слетАли летАли искАли молчАли
+    постучАлись остАлись расстАлись
+    прогулЯться смеЯться менЯться
+    снИться длИться дымИться
+    звучАл молчАл кричАл
+  `,
+  other: `
+    наглЯдно рьЯно прЯно пьЯно
+    стрАнно плАвно слАвно рАно
+    себЯ тебЯ менЯ самУ
+    крАтко глАдко слАдко
+  `
+};
+
+const dict = Object.entries(groups).flatMap(([pos, words]) =>
+  words.trim().split(/\s+/).map(marked => ({
+    word: marked.toLowerCase(),
+    stress: marked.search(/[АЕЁИОУЫЭЮЯ]/),
+    pos
+  }))
+);
+
+const posNames = {
+  noun: "существительное",
+  verb: "глагол",
+  other: "другая часть речи"
+};
+
+$("dictSize").textContent = "В тестовой базе: " + dict.length + " словоформ.";
+
+/* Блокнот */
+try {
+  $("note").value = localStorage.getItem(storageKey) || "";
+  $("saved").textContent = "Локальная запись";
+} catch {
+  $("saved").textContent = "Хранилище недоступно — скачивай текст";
+}
+
+$("note").addEventListener("input", () => {
+  try {
+    localStorage.setItem(storageKey, $("note").value);
+    $("saved").textContent = "Сохранено на устройстве";
+  } catch {
+    $("saved").textContent = "Не сохранено! Скачай текст";
+  }
+});
+
+$("exportText").onclick = () => {
+  const blob = new Blob([$ ("note").value], {
+    type: "text/plain;charset=utf-8"
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "мой-текст-" + Date.now() + ".txt";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+};
+
+/* Плеер: файл остаётся локальным */
+let mediaURL = null;
+const player = $("player");
+
+$("mediaFile").onchange = () => {
+  const file = $("mediaFile").files[0];
+  if (!file) return;
+
+  player.pause();
+  player.removeAttribute("src");
+  player.load();
+  if (mediaURL) URL.revokeObjectURL(mediaURL);
+
+  mediaURL = URL.createObjectURL(file);
+  player.src = mediaURL;
+  player.load();
+
+  $("mediaInfo").textContent =
+    file.name + " — нажми ▶. Если звука нет, формат может не поддерживаться.";
+};
+
+$("loop").onchange = () => {
+  player.loop = $("loop").checked;
+};
+
+player.addEventListener("error", () => {
+  $("mediaInfo").textContent =
+    "Не удалось воспроизвести файл. Возможно, его формат или кодек не поддерживается.";
+});
+
+/* Приблизительный алгоритм */
+function distance(a, b) {
+  let prev = Array.from({length: b.length + 1}, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const next = [i];
+    for (let j = 1; j <= b.length; j++) {
+      next[j] = Math.min(
+        prev[j] + 1,
+        next[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    prev = next;
+  }
+  return prev[b.length];
+}
+
+function signature(word, stress) {
+  const map = {я:"а", ё:"о", ю:"у", е:"э"};
+  let tail = word.slice(stress)
+    .replace(/ться|тся/g, "ца")
+    .replace(/[ьъ]/g, "")
+    .replace(/[яёюе]/g, ch => map[ch]);
+
+  const devoiced = {б:"п", в:"ф", г:"к", д:"т", ж:"ш", з:"с"};
+  tail = tail.replace(/[бвгджз]$/, ch => devoiced[ch]);
+
+  return {
+    tail,
+    v: [...tail].filter(isVowel).join(""),
+    c: [...tail].filter(ch => !isVowel(ch)).join("")
+  };
+}
+
+function rhymeCost(a, b) {
+  // В этой версии ищем только одинаковую нормализованную
+  // ударную гласную. Остальные различия допускают режимы.
+  if (!a.v || !b.v || a.v[0] !== b.v[0]) return Infinity;
+
+  const vd = distance(a.v, b.v) / Math.max(a.v.length, b.v.length, 1);
+  const cd = distance(a.c, b.c) / Math.max(a.c.length, b.c.length, 1);
+  const td = distance(a.tail, b.tail) /
+             Math.max(a.tail.length, b.tail.length, 1);
+
+  return 1.4 * vd + 0.65 * cd + 0.35 * td;
+}
+
+let chosenStress = -1;
+
+function getWord() {
+  return $("query").value.trim().toLowerCase();
+}
+
+function prepareQuery() {
+  const word = getWord();
+  const known = dict.find(item => item.word === word);
+  const positions = [...word]
+    .map((ch, i) => isVowel(ch) ? i : -1)
+    .filter(i => i >= 0);
+
+  chosenStress = known ? known.stress :
+    positions.length === 1 ? positions[0] : -1;
+
+  renderStress();
+  renderResults();
+}
+
+function renderStress() {
+  const word = getWord();
+  $("stress").replaceChildren();
+
+  if (!/^[а-яё]+$/.test(word)) return;
+
+  [...word].forEach((ch, i) => {
+    if (!isVowel(ch)) return;
+    const button = document.createElement("button");
+    button.textContent =
+      word.slice(0, i) + ch.toUpperCase() + word.slice(i + 1);
+    button.className = chosenStress === i ? "primary" : "";
+    button.setAttribute("aria-label", "Ударение: " + button.textContent);
+    button.onclick = () => {
+      chosenStress = i;
+      renderStress();
+      renderResults();
+    };
+    $("stress").append(button);
+  });
+}
+
+function renderResults() {
+  const word = getWord();
+  $("results").replaceChildren();
+  $("message").textContent = "";
+
+  if (!word) {
+    $("hint").textContent = "Введи слово или выдели его в блокноте.";
+    return;
+  }
+  if (!/^[а-яё]+$/.test(word)) {
+    $("hint").textContent =
+      "В первой версии — одно русское слово, без пробелов и знаков.";
+    return;
+  }
+  if (chosenStress < 0) {
+    $("hint").textContent = "Укажи ударение кнопкой выше.";
+    return;
+  }
+
+  const mode = $("mode").value;
+  const limit = {tight: 0.30, free: 1.00, exp: 1.85}[mode];
+  const source = signature(word, chosenStress);
+  const part = $("part").value;
+
+  const found = dict
+    .filter(item => item.word !== word)
+    .filter(item =>
+      part === "all" ||
+      (part === "noun" && item.pos === "noun") ||
+      (part === "noverb" && item.pos !== "verb")
+    )
+    .map(item => ({
+      ...item,
+      cost: rhymeCost(source, signature(item.word, item.stress))
+    }))
+    .filter(item => item.cost <= limit)
+    .sort((a, b) => a.cost - b.cost || a.word.localeCompare(b.word, "ru"))
+    .slice(0, 30);
+
+  $("hint").textContent = found.length
+    ? "Проверь ударение выше. Варианты из маленькой тестовой базы:"
+    : "В тестовой базе вариантов нет. Это не значит, что рифм не существует.";
+
+  for (const item of found) {
+    const button = document.createElement("button");
+    const title = document.createElement("span");
+    title.textContent = item.word;
+    const label = document.createElement("small");
+    label.textContent = posNames[item.pos];
+    button.append(title, label);
+
+    button.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(item.word);
+        $("message").textContent = "Скопировано: " + item.word;
+      } catch {
+        $("message").textContent =
+          "Копирование недоступно. Выдели и скопируй вручную: " + item.word;
+      }
+    };
+    $("results").append(button);
+  }
+}
+
+function openSearch(text) {
+  $("sheet").hidden = false;
+  $("query").value = text || "";
+  prepareQuery();
+}
+
+let lastSelection = "";
+let selectionTimer;
+
+function checkSelection() {
+  if (document.activeElement !== $("note")) return;
+  const note = $("note");
+  const text = note.value.slice(note.selectionStart, note.selectionEnd).trim();
+
+  if (!text) {
+    lastSelection = "";
+    return;
+  }
+  if (text === lastSelection) return;
+  lastSelection = text;
+  if (/^[а-яё]+$/i.test(text)) openSearch(text);
+}
+
+function scheduleSelection() {
+  clearTimeout(selectionTimer);
+  selectionTimer = setTimeout(checkSelection, 200);
+}
+
+document.addEventListener("selectionchange", scheduleSelection);
+$("note").addEventListener("select", scheduleSelection);
+$("note").addEventListener("touchend", scheduleSelection);
+$("note").addEventListener("mouseup", scheduleSelection);
+
+$("openRhymes").onclick = () => {
+  const note = $("note");
+  const selected = note.value
+    .slice(note.selectionStart, note.selectionEnd).trim();
+  openSearch(selected);
+};
+
+$("closeSheet").onclick = () => { $("sheet").hidden = true; };
+$("query").addEventListener("input", prepareQuery);
+$("mode").onchange = renderResults;
+$("part").onchange = renderResults;
+
+/* Офлайн-копия */
+async function enableOffline() {
+  if (!("serviceWorker" in navigator) || !window.isSecureContext) {
+    $("offline").textContent =
+      "Офлайн-копия недоступна. Открой приложение по HTTPS через GitHub Pages.";
+    return;
+  }
+  try {
+    await navigator.serviceWorker.register("./sw.js");
+    await navigator.serviceWorker.ready;
+    $("offline").textContent =
+      "Офлайн-копия готова. Теперь можно проверить в авиарежиме.";
+  } catch {
+    $("offline").textContent =
+      "Офлайн-копия не создана. Проверь наличие sw.js и обнови страницу с интернетом.";
+  }
+}
+enableOffline();
+</script>
+</body>
+</html>
